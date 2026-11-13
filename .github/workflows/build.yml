@@ -29,6 +29,8 @@ jobs:
       - run: npm install
       - run: npx tauri icon app-icon.png
       - run: npx tauri android init
+      - name: Partage et accès aux fichiers Android
+        run: node scripts/android-patch.js
       # APK signé avec la clé de debug : s'installe directement sur le téléphone.
       - run: npx tauri android build --apk --debug
       - name: Rassembler l'APK

@@ -8,13 +8,35 @@ use tauri_plugin_fs::{FsExt, OpenOptions};
 use vault::Note;
 
 /// Dossier des notes, créé automatiquement.
-/// PC : Documents/Grimoire. Android : stockage privé de l'appli.
-fn vault_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+/// PC : Documents/Grimoire. Android : Documents/Grimoire si l'accès aux fichiers est accordé,
+/// sinon le stockage privé de l'appli (les notes y sont reprises dès que l'accès est accordé).
+fn private_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     #[cfg(mobile)]
     let base = app.path().app_data_dir();
     #[cfg(not(mobile))]
     let base = app.path().document_dir();
     Ok(base.map_err(|e| e.to_string())?.join("Grimoire"))
+}
+
+#[cfg(target_os = "android")]
+fn shared_dir() -> Option<PathBuf> {
+    let dir = PathBuf::from("/storage/emulated/0/Documents/Grimoire");
+    std::fs::create_dir_all(&dir).ok()?;
+    let probe = dir.join(".ecriture");
+    std::fs::write(&probe, b"ok").ok()?;
+    let _ = std::fs::remove_file(probe);
+    Some(dir)
+}
+
+fn vault_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    #[cfg(target_os = "android")]
+    if let Some(shared) = shared_dir() {
+        let private = private_dir(app)?;
+        // Si la reprise échoue, les anciens fichiers restent en place et sont réessayés au prochain appel.
+        let _ = vault::migrate(&private, &shared);
+        return Ok(shared);
+    }
+    private_dir(app)
 }
 
 #[tauri::command]

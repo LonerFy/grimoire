@@ -151,6 +151,41 @@ pub fn delete_note(dir: &Path, id: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Reprend les notes d'un ancien dossier vers un nouveau, sans rien perdre :
+/// on copie ce qui manque ou ce qui est plus récent, on relit pour vérifier,
+/// et seulement alors on supprime les anciens fichiers. Renvoie le nombre de notes reprises.
+pub fn migrate(from: &Path, to: &Path) -> io::Result<usize> {
+    if !from.exists() || from == to {
+        return Ok(0);
+    }
+    let old = read_all(from)?;
+    if old.is_empty() {
+        return Ok(0);
+    }
+    let mut copied = 0;
+    for n in &old {
+        let newer = match read_all(to)?.iter().find(|o| o.id == n.id) {
+            Some(o) => n.updated > o.updated,
+            None => true,
+        };
+        if newer {
+            write_note(to, n)?;
+            copied += 1;
+        }
+    }
+    let now = read_all(to)?;
+    for n in &old {
+        match now.iter().find(|o| o.id == n.id) {
+            Some(o) if o.updated >= n.updated => {}
+            _ => return Err(io::Error::new(io::ErrorKind::Other, "vérification de la copie échouée, anciens fichiers conservés")),
+        }
+    }
+    for n in &old {
+        delete_note(from, &n.id)?;
+    }
+    Ok(copied)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +241,25 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].title, "Windows");
         assert_eq!(all[0].body, "corps");
+    }
+
+    #[test]
+    fn migrate_keeps_newest_and_empties_source() {
+        let (a, b) = (tmp("mig-a"), tmp("mig-b"));
+        let mut older = note("n1", "Commune", "ancienne");
+        older.updated = 10.0;
+        let mut newer = older.clone();
+        newer.body = "récente".into();
+        newer.updated = 20.0;
+        write_note(&a, &older).unwrap();
+        write_note(&a, &note("n2", "Seule dans a", "x")).unwrap();
+        write_note(&b, &newer).unwrap();
+        assert_eq!(migrate(&a, &b).unwrap(), 1);
+        let mut all = read_all(&b).unwrap();
+        all.sort_by(|x, y| x.id.cmp(&y.id));
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].body, "récente");
+        assert!(read_all(&a).unwrap().is_empty());
+        assert_eq!(migrate(&a, &b).unwrap(), 0);
     }
 }

@@ -7,6 +7,7 @@ Appli de notes liées (`[[ ]]`), graphe interactif, synchronisation PC ↔ tél�
 - `src/vendor/`, `src/fonts/` : librairies et polices embarquées. L'appli doit marcher hors ligne : aucun CDN.
 - `src-tauri/src/vault.rs` : coffre sur disque, un fichier `.md` par note dans le dossier `Grimoire` (en-tête `---` avec id, title, pinned, created, updated). Testé par `cargo test`.
 - `src-tauri/src/lib.rs` : commandes Tauri (`vault_path`, `vault_list`, `vault_write`, `vault_delete`, `export_file`).
+- `android/MainActivity.kt` + `scripts/android-patch.js` : le dossier `src-tauri/gen/` n'est pas versionné ; le workflow le complète après `tauri android init` (permission « accès à tous les fichiers », réception de texte partagé, pont JS `GrimoireAndroid` pour partager une note et lire le texte reçu).
 - `mcp/` : serveur MCP Node (lit et écrit `grimoire-notes.json` du dépôt de notes).
 - `.github/workflows/build.yml` : construit l'APK (debug, installable directement) et l'installeur Windows. Un tag `v*` publie dans Releases.
 
@@ -25,8 +26,10 @@ Appli de notes liées (`[[ ]]`), graphe interactif, synchronisation PC ↔ tél�
 - Commits : messages courts en français, sans ligne `Co-Authored-By` ni `Claude-Session`.
 - Après un changement natif (Rust, plugins, config Tauri), il faut un nouveau build ; un changement dans `src/` aussi, l'appli n'a pas de mise à jour à distance.
 
+## Android
+Les notes vont dans `Documents/Grimoire` si l'utilisateur accorde « Accès à tous les fichiers » (invite au premier lancement). Sinon elles restent dans le stockage privé et `vault::migrate` les reprend dans Documents dès que l'accès est accordé (copie, vérification, puis suppression de l'ancien).
+
 ## Suite prévue
-1. Dossier choisi et visible sur Android, partage natif Android (plugin Kotlin).
-2. Jeton GitHub dans le coffre sécurisé du système.
-3. Synchro note par note avec copie en cas de conflit.
-4. Images et pièces jointes, corbeille, historique.
+1. Jeton GitHub dans le coffre sécurisé du système.
+2. Synchro note par note avec copie en cas de conflit.
+3. Images et pièces jointes, corbeille, historique.

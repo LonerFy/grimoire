@@ -559,6 +559,37 @@ async function diskOpen() {
   return list.length > 0 || !!old;
 }
 
+/* Pont Android (voir android/MainActivity.kt) : accès aux fichiers, partage natif, texte reçu. */
+const AND = window.GrimoireAndroid && typeof window.GrimoireAndroid.hasFileAccess === 'function' ? window.GrimoireAndroid : null;
+function takeShared() {
+  let t = ''; try { t = String(AND.takeSharedText() || '').trim(); } catch (e) { return; }
+  if (!t) return;
+  const lines = t.split('\n'), first = lines[0].trim();
+  if (lines.length > 1 && first.length <= 80) createNote(first, lines.slice(1).join('\n').trim() + '\n');
+  else createNote(first.slice(0, 60) + (first.length > 60 ? '…' : ''), t + '\n');
+  toast('Note créée à partir du texte partagé.');
+}
+function androidSetup() {
+  if (!AND) return;
+  const granted = () => { try { return AND.hasFileAccess(); } catch (e) { return true; } };
+  if (!granted()) {
+    toast("Pour garder tes notes dans Documents/Grimoire, visibles depuis ton téléphone, autorise l'accès aux fichiers.", {
+      ms: 20000, action: 'Autoriser',
+      fn: () => {
+        AND.requestFileAccess();
+        const wait = setInterval(async () => {
+          if (!granted()) return;
+          clearInterval(wait);
+          flushAll(); await diskFlush();
+          location.reload();
+        }, 1500);
+      }
+    });
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.loaded) takeShared(); });
+  takeShared();
+}
+
 async function startLocal() {
   let had = false;
   if (TAURI) { try { had = await diskOpen(); } catch (e) { Disk.on = false; toast("Le dossier Grimoire est inaccessible. Les notes restent dans l'appli pour l'instant.", { ms: 9000 }); } }
@@ -574,7 +605,7 @@ async function startLocal() {
   const saved = Disk.on ? null : LS.get('grimoire.vault');
   if (saved && Array.isArray(saved.notes)) for (const d of saved.notes) { if (d && d.id) S.notes.set(d.id, fromDoc(d.id, d)); }
   else if (!had && !saved && kind === 'local' && !LS.get('grimoire.seeded')) { for (const n of seedNotes()) S.notes.set(n.id, n); LS.set('grimoire.seeded', 1); persistVault.now(); }
-  S.loaded = true; afterLoad(); paintSync();
+  S.loaded = true; afterLoad(); paintSync(); androidSetup();
   if (kind === 'github') {
     ghSync();
     setInterval(() => { if (!document.hidden) ghSync(); }, 30000);
@@ -1313,9 +1344,10 @@ function bindUi() {
     try { await navigator.clipboard.writeText(noteText(n)); toast('Note copiée. Colle-la où tu veux.'); }
     catch (e) { toast('La copie est bloquée dans cette vue.'); }
   };
-  $('#shareBtn').onclick = e => { e.stopPropagation(); const p = $('#shareMenu'), open = p.hidden; closePops(); if (open) { $('#shNative').hidden = !navigator.share; place(p, $('#shareBtn')); } };
+  $('#shareBtn').onclick = e => { e.stopPropagation(); const p = $('#shareMenu'), open = p.hidden; closePops(); if (open) { $('#shNative').hidden = !(AND || navigator.share); place(p, $('#shareBtn')); } };
   $('#shNative').onclick = async () => {
     closePops(); const n = S.notes.get(S.active); if (!n) return;
+    if (AND) { try { AND.shareText(n.title || 'Note', plainText(n)); } catch (e) { copyNote(n); } return; }
     try { await navigator.share({ title: n.title || 'Note', text: plainText(n) }); }
     catch (e) { if (!e || e.name !== 'AbortError') copyNote(n); }
   };
