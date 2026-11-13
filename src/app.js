@@ -530,17 +530,50 @@ const b64e = s => { const b = new TextEncoder().encode(s); let bin = ''; for (le
 const b64d = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\s/g, '')), c => c.charCodeAt(0)));
 let persistVault = () => {};
 
-function startLocal() {
-  persistVault = debounce(() => LS.set('grimoire.vault', { v: 1, notes: [...S.notes.values()].map(n => Object.assign({ id: n.id }, toDoc(n))) }), 120);
+/* Coffre sur disque (appli installée) : un fichier .md par note dans le dossier Grimoire. */
+const TAURI = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke ? window.__TAURI__.core : null;
+const Disk = { on: false, path: '', seen: new Map(), chain: Promise.resolve(), failed: false };
+const diskSig = n => n.updated + '|' + (n.pinned ? 1 : 0) + '|' + n.title + '|' + n.body.length;
+function diskFlush() {
+  const todo = [];
+  for (const n of S.notes.values()) { const g = diskSig(n); if (Disk.seen.get(n.id) !== g) { Disk.seen.set(n.id, g); todo.push(['vault_write', { note: Object.assign({ id: n.id }, toDoc(n)) }]); } }
+  for (const id of [...Disk.seen.keys()]) if (!S.notes.has(id)) { Disk.seen.delete(id); todo.push(['vault_delete', { id }]); }
+  for (const [cmd, args] of todo) Disk.chain = Disk.chain.then(() => TAURI.invoke(cmd, args)).catch(e => {
+    Disk.seen.delete(args.id || args.note.id);
+    if (!Disk.failed) { Disk.failed = true; toast("Écriture impossible dans le dossier Grimoire : " + String(e && e.message || e), { ms: 9000 }); }
+  });
+  return Disk.chain;
+}
+async function diskOpen() {
+  Disk.path = await TAURI.invoke('vault_path');
+  const list = await TAURI.invoke('vault_list');
+  for (const d of list) { if (!d || !d.id) continue; const n = fromDoc(d.id, d); S.notes.set(n.id, n); Disk.seen.set(n.id, diskSig(n)); }
+  Disk.on = true;
+  // Première ouverture après mise à jour : on reprend les notes de l'ancien stockage, une seule fois.
+  const old = LS.get('grimoire.vault');
+  if (old && Array.isArray(old.notes) && !LS.get('grimoire.migrated')) {
+    for (const d of old.notes) { if (!d || !d.id) continue; const cur = S.notes.get(d.id), n = fromDoc(d.id, d); if (!cur || n.updated > cur.updated) S.notes.set(n.id, n); }
+    await diskFlush();
+    if (!Disk.failed) { LS.set('grimoire.migrated', Date.now()); try { localStorage.removeItem('grimoire.vault'); } catch (e) { /* ignoré */ } }
+  }
+  return list.length > 0 || !!old;
+}
+
+async function startLocal() {
+  let had = false;
+  if (TAURI) { try { had = await diskOpen(); } catch (e) { Disk.on = false; toast("Le dossier Grimoire est inaccessible. Les notes restent dans l'appli pour l'instant.", { ms: 9000 }); } }
+  persistVault = Disk.on
+    ? debounce(diskFlush, 120)
+    : debounce(() => LS.set('grimoire.vault', { v: 1, notes: [...S.notes.values()].map(n => Object.assign({ id: n.id }, toDoc(n))) }), 120);
   const kind = ghOn() ? 'github' : 'local';
   S.backend = {
     kind,
     put: async () => { persistVault.now(); if (kind === 'github') ghSchedule(); },
     del: async id => { if (kind === 'github') { GH.tomb[id] = Date.now(); LS.set('grimoire.tomb', GH.tomb); } persistVault.now(); if (kind === 'github') ghSchedule(); }
   };
-  const saved = LS.get('grimoire.vault');
+  const saved = Disk.on ? null : LS.get('grimoire.vault');
   if (saved && Array.isArray(saved.notes)) for (const d of saved.notes) { if (d && d.id) S.notes.set(d.id, fromDoc(d.id, d)); }
-  else if (kind === 'local') { for (const n of seedNotes()) S.notes.set(n.id, n); persistVault.now(); }
+  else if (!had && !saved && kind === 'local' && !LS.get('grimoire.seeded')) { for (const n of seedNotes()) S.notes.set(n.id, n); LS.set('grimoire.seeded', 1); persistVault.now(); }
   S.loaded = true; afterLoad(); paintSync();
   if (kind === 'github') {
     ghSync();
@@ -1013,7 +1046,7 @@ function syncState() {
 }
 const SYNC = {
   opening: ['Ouverture', 'Ouverture du grimoire', "Connexion à ton carnet. Si le réseau est lent, la dernière copie connue s'affiche d'abord."],
-  local: ['Cet appareil', 'Cet appareil seulement', "Les notes restent sur cet appareil. Pour les retrouver sur ton PC et ton téléphone, active la synchronisation GitHub : menu ⋯ en bas de l'index."],
+  local: ['Cet appareil', 'Cet appareil seulement', "Les notes restent sur cet appareil, dans le dossier Grimoire. Pour les retrouver sur ton PC et ton téléphone, active la synchronisation GitHub : menu ⋯ en bas de l'index."],
   saving: ['Envoi', 'Enregistrement en cours', "Tes dernières modifications partent vers ton carnet. Cela prend une seconde ou deux."],
   cache: ['Copie locale', 'Copie locale', "Le serveur ne répond pas encore. Tu vois la dernière copie connue sur cet appareil ; elle peut avoir du retard. La mise à jour se fera seule dès que la connexion revient."],
   synced: ['Synchronisé', 'Tout est synchronisé', "Tes notes sont dans ton compte Claude, dans un carnet que toi seul peux lire. Ouvre cette même page sur ton téléphone ou ton PC, connecté au même compte : elles y sont, et chaque modification arrive en direct."],
@@ -1030,11 +1063,12 @@ function fillSyncPop() {
   if (S.backend && S.backend.kind === 'github') {
     const E = { auth: ['Jeton refusé', "GitHub refuse le jeton. Vérifie qu'il n'a pas expiré et qu'il a le droit Contents en lecture et écriture sur ce dépôt."], repo: ['Dépôt introuvable', "GitHub ne trouve pas ce dépôt avec ce jeton. Vérifie l'orthographe (propriétaire/nom) et que le jeton couvre ce dépôt."], net: ['Hors ligne', "Pas de connexion à GitHub pour le moment. Tes notes sont gardées ici et partiront dès que le réseau revient."], conflict: ['Conflit', "Deux appareils écrivaient en même temps. Un nouvel essai part tout seul."], badfile: ['Fichier illisible', "Le fichier grimoire-notes.json du dépôt est abîmé. Rien n'est écrasé : restaure-le depuis l'historique du dépôt."] };
     if (GH.err) { $('#syncPop').innerHTML = '<h3>' + E[GH.err][0] + '</h3><p>' + E[GH.err][1] + '</p>'; return; }
-    $('#syncPop').innerHTML = '<h3>' + SYNC[st][1] + '</h3><p>' + (st === 'saving' ? 'Envoi vers GitHub en cours.' : 'Tes notes sont dans ton dépôt GitHub' + (GH.last ? ', vérifié ' + ago(GH.last) : '') + '. Les autres appareils les recevront en moins d\'une minute.') + '</p>';
+    $('#syncPop').innerHTML = (Disk.on ? '<p>Dossier des notes : <b style="overflow-wrap:anywhere">' + esc(Disk.path) + '</b></p>' : '') + '<h3>' + SYNC[st][1] + '</h3><p>' + (st === 'saving' ? 'Envoi vers GitHub en cours.' : 'Tes notes sont dans ton dépôt GitHub' + (GH.last ? ', vérifié ' + ago(GH.last) : '') + '. Les autres appareils les recevront en moins d\'une minute.') + '</p>';
     return;
   }
   if (st === 'error' && S.sync.error === 'quota_exceeded') extra = '<p>Le carnet est plein. Supprime quelques notes pour libérer de la place.</p>';
   if (st === 'error' && S.sync.error === 'invalid_argument') extra = "<p>L'écriture est refusée pour ton accès à cette page. Il faut au moins le rôle Contributeur.</p>";
+  if (Disk.on) extra += '<p>Dossier des notes : <b style="overflow-wrap:anywhere">' + esc(Disk.path) + '</b></p>';
   $('#syncPop').innerHTML = '<h3>' + SYNC[st][1] + '</h3><p>' + SYNC[st][2] + '</p>' + extra;
 }
 

@@ -1,6 +1,41 @@
+mod vault;
+
 use std::io::Write;
+use std::path::PathBuf;
+use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_fs::{FsExt, OpenOptions};
+use vault::Note;
+
+/// Dossier des notes, créé automatiquement.
+/// PC : Documents/Grimoire. Android : stockage privé de l'appli.
+fn vault_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    #[cfg(mobile)]
+    let base = app.path().app_data_dir();
+    #[cfg(not(mobile))]
+    let base = app.path().document_dir();
+    Ok(base.map_err(|e| e.to_string())?.join("Grimoire"))
+}
+
+#[tauri::command]
+fn vault_path(app: tauri::AppHandle) -> Result<String, String> {
+    Ok(vault_dir(&app)?.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn vault_list(app: tauri::AppHandle) -> Result<Vec<Note>, String> {
+    vault::read_all(&vault_dir(&app)?).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn vault_write(app: tauri::AppHandle, note: Note) -> Result<(), String> {
+    vault::write_note(&vault_dir(&app)?, &note).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn vault_delete(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    vault::delete_note(&vault_dir(&app)?, &id).map_err(|e| e.to_string())
+}
 
 /// Ouvre la boîte « Enregistrer sous » du système (PC et Android) et y écrit le fichier.
 /// Renvoie false si l'utilisateur annule.
@@ -21,7 +56,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![export_file])
+        .invoke_handler(tauri::generate_handler![vault_path, vault_list, vault_write, vault_delete, export_file])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de Grimoire");
 }
