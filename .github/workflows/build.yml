@@ -23,7 +23,7 @@ jobs:
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: src-tauri }
       - run: npm install
@@ -31,13 +31,42 @@ jobs:
       - run: npx tauri android init
       - name: Partage et accès aux fichiers Android
         run: node scripts/android-patch.js
-      # APK signé avec la clé de debug : s'installe directement sur le téléphone.
-      - run: npx tauri android build --apk --debug
-      - name: Rassembler l'APK
+      # Clé de signature stable (secrets GitHub). Rien n'est affiché : pas de set -x, valeurs jamais en argument.
+      - name: Clé de signature
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
+          [ -n "$KS_B64" ]   || { echo "::error::Secret ANDROID_KEYSTORE_BASE64 absent ou vide"; exit 1; }
+          [ -n "$KS_PASS" ]  || { echo "::error::Secret ANDROID_KEYSTORE_PASSWORD absent ou vide"; exit 1; }
+          [ -n "$KS_ALIAS" ] || { echo "::error::Secret ANDROID_KEY_ALIAS absent ou vide"; exit 1; }
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/grimoire-release.jks" 2>/dev/null \
+            || { echo "::error::ANDROID_KEYSTORE_BASE64 n'est pas du base64 valide"; exit 1; }
+          keytool -list -keystore "$RUNNER_TEMP/grimoire-release.jks" -storepass:env KS_PASS -alias "$KS_ALIAS" > /dev/null 2>&1 \
+            || { echo "::error::Le keystore ne s'ouvre pas avec ce mot de passe et cet alias"; exit 1; }
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/grimoire-release.jks" >> "$GITHUB_ENV"
+          echo "Clé de signature prête."
+      # Release signé, arm64 seul (le debug faisait 462 Mo : 4 architectures, symboles de débogage).
+      - name: Build release signé (arm64)
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: npx tauri android build --apk --target aarch64
+      - name: Contrôler et rassembler l'APK
+        env:
+          EXPECTED_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
+        run: |
+          apks=$(find src-tauri/gen/android -name "*.apk" -path "*release*" ! -name "*unsigned*")
+          if [ "$(printf '%s\n' "$apks" | grep -c .)" != "1" ]; then
+            echo "::error::Un seul APK release signé attendu. Trouvés :"; find src-tauri/gen/android -name "*.apk"; exit 1
+          fi
+          export BUILD_TOOLS="$ANDROID_HOME/build-tools/34.0.0"
+          export EXPECTED_VERSION="$(node -p "require('./package.json').version")"
+          bash scripts/check-apk.sh "$apks"
           mkdir -p out
-          find src-tauri/gen/android -name "*.apk" -path "*universal*" -exec cp {} out/Grimoire.apk \;
-          ls -lh out
+          cp "$apks" out/Grimoire.apk
+          ls -l out
       - uses: actions/upload-artifact@v4
         with: { name: Grimoire-android, path: out/Grimoire.apk }
       - if: startsWith(github.ref, 'refs/tags/v')
