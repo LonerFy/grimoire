@@ -6,7 +6,8 @@ Appli de notes liées (`[[ ]]`), graphe interactif, synchronisation PC ↔ tél�
 - `src/` : interface en HTML, CSS, JS purs, sans étape de build. `app.js` contient tout (état, rendu, graphe canvas, synchro GitHub, coffre disque).
 - `src/vendor/`, `src/fonts/` : librairies et polices embarquées. L'appli doit marcher hors ligne : aucun CDN.
 - `src-tauri/src/vault.rs` : coffre sur disque, un fichier `.md` par note dans le dossier `Grimoire` (en-tête `---` avec id, title, pinned, created, updated). Testé par `cargo test`.
-- `src-tauri/src/lib.rs` : commandes Tauri (`vault_path`, `vault_list`, `vault_write`, `vault_delete`, `export_file`).
+- `src-tauri/src/lib.rs` : commandes Tauri (`vault_path`, `vault_list`, `vault_write`, `vault_delete`, `export_file`), plus `secret_get`, `secret_set`, `secret_delete` (jeton GitHub, voir `secret.rs`).
+- `src-tauri/src/secret.rs` : jeton GitHub dans le Gestionnaire d'identifiants Windows (crate `keyring` 4.x, feature `v1`, déclarée hors Android uniquement). Sur Android, le jeton est chiffré par une clé AES-GCM de l'Android Keystore (pont `secretGet/secretSet/secretDelete` dans `MainActivity.kt`). `localStorage` ne garde que `{ repo }`. Clé Keystore perdue : l'entrée est effacée, la synchro se met en pause et le jeton est redemandé.
 - `android/MainActivity.kt` + `scripts/android-patch.js` : le dossier `src-tauri/gen/` n'est pas versionné ; le workflow le complète après `tauri android init` (permission « accès à tous les fichiers », réception de texte partagé, pont JS `GrimoireAndroid` pour partager une note et lire le texte reçu).
 - `mcp/` : serveur MCP Node (lit et écrit `grimoire-notes.json` du dépôt de notes).
 - `.github/workflows/build.yml` : construit l'APK (debug, installable directement) et l'installeur Windows. Un tag `v*` publie dans Releases.
@@ -30,6 +31,5 @@ Appli de notes liées (`[[ ]]`), graphe interactif, synchronisation PC ↔ tél�
 Les notes vont dans `Documents/Grimoire` si l'utilisateur accorde « Accès à tous les fichiers » (invite au premier lancement). Sinon elles restent dans le stockage privé et `vault::migrate` les reprend dans Documents dès que l'accès est accordé (copie, vérification, puis suppression de l'ancien).
 
 ## Suite prévue
-1. Jeton GitHub dans le coffre sécurisé du système.
-2. Synchro note par note avec copie en cas de conflit.
-3. Images et pièces jointes, corbeille, historique.
+1. Synchro note par note avec copie en cas de conflit.
+2. Images et pièces jointes, corbeille, historique.

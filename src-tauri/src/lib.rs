@@ -1,3 +1,4 @@
+mod secret;
 mod vault;
 
 use std::io::Write;
@@ -59,6 +60,16 @@ fn vault_delete(app: tauri::AppHandle, id: String) -> Result<(), String> {
     vault::delete_note(&vault_dir(&app)?, &id).map_err(|e| e.to_string())
 }
 
+/// Jeton GitHub dans le coffre du système. Les erreurs ne contiennent jamais la valeur.
+#[tauri::command]
+fn secret_get() -> Result<Option<String>, String> { secret::get() }
+
+#[tauri::command]
+fn secret_set(value: String) -> Result<(), String> { secret::set(&value) }
+
+#[tauri::command]
+fn secret_delete() -> Result<(), String> { secret::delete() }
+
 /// Ouvre la boîte « Enregistrer sous » du système (PC et Android) et y écrit le fichier.
 /// Renvoie false si l'utilisateur annule.
 #[tauri::command]
@@ -78,7 +89,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![vault_path, vault_list, vault_write, vault_delete, export_file])
+        .invoke_handler(tauri::generate_handler![vault_path, vault_list, vault_write, vault_delete, export_file, secret_get, secret_set, secret_delete])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de Grimoire");
 }

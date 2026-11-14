@@ -55,6 +55,16 @@ jobs:
         with: { workspaces: src-tauri }
       - run: npm install
       - run: npx tauri icon app-icon.png
+      - name: Tests Rust (coffre de notes)
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      # Preuve que le jeton survit : trois processus distincts sur le vrai Gestionnaire d'identifiants.
+      # Un coffre en mémoire échouerait à l'étape 2.
+      - name: Gestionnaire d'identifiants, 1/3 écriture
+        run: cargo test --manifest-path src-tauri/Cargo.toml persist_1_ecrit -- --ignored
+      - name: Gestionnaire d'identifiants, 2/3 relecture (autre processus)
+        run: cargo test --manifest-path src-tauri/Cargo.toml persist_2_relit -- --ignored
+      - name: Gestionnaire d'identifiants, 3/3 nettoyage
+        run: cargo test --manifest-path src-tauri/Cargo.toml persist_3_efface -- --ignored
       - run: npx tauri build
       - uses: actions/upload-artifact@v4
         with:

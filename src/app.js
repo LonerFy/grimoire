@@ -524,8 +524,8 @@ async function seedCloud(vault) {
 }
 
 /* ---------- local vault + GitHub sync ---------- */
-const GH = { cfg: LS.get('grimoire.gh'), tomb: LS.get('grimoire.tomb') || {}, busy: false, queued: false, err: null, timer: 0, last: 0 };
-const ghOn = () => !!(GH.cfg && GH.cfg.repo && GH.cfg.token);
+const GH = { cfg: LS.get('grimoire.gh'), token: '', lost: false, unavail: false, insecure: false, tomb: LS.get('grimoire.tomb') || {}, busy: false, queued: false, err: null, timer: 0, last: 0 };
+const ghOn = () => !!(GH.cfg && GH.cfg.repo && GH.token);
 const b64e = s => { const b = new TextEncoder().encode(s); let bin = ''; for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(bin); };
 const b64d = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\s/g, '')), c => c.charCodeAt(0)));
 let persistVault = () => {};
@@ -561,6 +561,55 @@ async function diskOpen() {
 
 /* Pont Android (voir android/MainActivity.kt) : accès aux fichiers, partage natif, texte reçu. */
 const AND = window.GrimoireAndroid && typeof window.GrimoireAndroid.hasFileAccess === 'function' ? window.GrimoireAndroid : null;
+/* Jeton GitHub dans le coffre du système : Gestionnaire d'identifiants (PC) ou Keystore (Android).
+   Les erreurs ne portent qu'un code ('unavailable' | 'lost'), jamais la valeur. */
+const secErr = code => Object.assign(new Error(code), { code });
+const Secret = {
+  async call(op, value) {
+    if (AND && typeof AND.secretGet === 'function') {
+      let r;
+      try { r = JSON.parse(op === 'get' ? AND.secretGet() : op === 'set' ? AND.secretSet(value) : AND.secretDelete()); } catch (e) { throw secErr('unavailable'); }
+      if (r.s === 'lost') throw secErr('lost');
+      if (r.s === 'none') return null;
+      if (r.s !== 'ok') throw secErr('unavailable');
+      return op === 'get' ? String(r.v || '') || null : null;
+    }
+    if (TAURI) {
+      try { return op === 'get' ? await TAURI.invoke('secret_get') : op === 'set' ? await TAURI.invoke('secret_set', { value }) : await TAURI.invoke('secret_delete'); }
+      catch (e) { throw secErr('unavailable'); }
+    }
+    throw secErr('unavailable');
+  },
+  get() { return this.call('get'); },
+  set(v) { return this.call('set', v); },
+  del() { return this.call('del'); }
+};
+
+/* Charge le jeton au démarrage et reprend l'ancien jeton en clair (localStorage) vers le coffre.
+   L'ancien n'est retiré qu'après relecture identique ; au moindre échec il reste en place. */
+async function ghLoadToken() {
+  const c = GH.cfg; if (!c || !c.repo) return;
+  const legacy = typeof c.token === 'string' ? c.token : '';
+  if (legacy) {
+    GH.token = legacy;
+    try {
+      await Secret.set(legacy);
+      if ((await Secret.get()) === legacy) LS.set('grimoire.gh', { repo: c.repo });
+      else GH.insecure = true;
+    } catch (e) { GH.insecure = true; }
+    return;
+  }
+  try {
+    GH.token = (await Secret.get()) || '';
+    if (!GH.token) GH.lost = true;
+  } catch (e) { if (e && e.code === 'lost') GH.lost = true; else GH.unavail = true; }
+}
+function ghLostNotice() {
+  if (GH.lost) toast("Ton jeton GitHub n'est plus dans le coffre de cet appareil (clé perdue ou appareil restauré). La synchronisation est en pause : redonne le jeton, tes notes locales sont intactes.", { ms: 20000, action: 'Redonner le jeton', fn: () => $('#ghBtn').click() });
+  else if (GH.unavail) toast("Le coffre du système ne répond pas : la synchronisation est en pause pour cette session. Relance l'appli ; si ça persiste, redonne le jeton depuis « Synchroniser via GitHub ».", { ms: 12000, action: 'Redonner le jeton', fn: () => $('#ghBtn').click() });
+  else if (GH.insecure) toast("Le coffre du système est indisponible : le jeton reste pour l'instant dans le stockage de l'appli. Nouvel essai au prochain lancement.", { ms: 9000 });
+}
+
 function takeShared() {
   let t = ''; try { t = String(AND.takeSharedText() || '').trim(); } catch (e) { return; }
   if (!t) return;
@@ -592,6 +641,7 @@ function androidSetup() {
 
 async function startLocal() {
   let had = false;
+  await ghLoadToken();
   if (TAURI) { try { had = await diskOpen(); } catch (e) { Disk.on = false; toast("Le dossier Grimoire est inaccessible. Les notes restent dans l'appli pour l'instant.", { ms: 9000 }); } }
   persistVault = Disk.on
     ? debounce(diskFlush, 120)
@@ -600,12 +650,12 @@ async function startLocal() {
   S.backend = {
     kind,
     put: async () => { persistVault.now(); if (kind === 'github') ghSchedule(); },
-    del: async id => { if (kind === 'github') { GH.tomb[id] = Date.now(); LS.set('grimoire.tomb', GH.tomb); } persistVault.now(); if (kind === 'github') ghSchedule(); }
+    del: async id => { if (kind === 'github' || (GH.cfg && GH.cfg.repo)) { GH.tomb[id] = Date.now(); LS.set('grimoire.tomb', GH.tomb); } persistVault.now(); if (kind === 'github') ghSchedule(); }
   };
   const saved = Disk.on ? null : LS.get('grimoire.vault');
   if (saved && Array.isArray(saved.notes)) for (const d of saved.notes) { if (d && d.id) S.notes.set(d.id, fromDoc(d.id, d)); }
   else if (!had && !saved && kind === 'local' && !LS.get('grimoire.seeded')) { for (const n of seedNotes()) S.notes.set(n.id, n); LS.set('grimoire.seeded', 1); persistVault.now(); }
-  S.loaded = true; afterLoad(); paintSync(); androidSetup();
+  S.loaded = true; afterLoad(); paintSync(); androidSetup(); ghLostNotice();
   if (kind === 'github') {
     ghSync();
     setInterval(() => { if (!document.hidden) ghSync(); }, 30000);
@@ -647,7 +697,7 @@ async function ghSync() {
   if (GH.busy) { GH.queued = true; return; }
   GH.busy = true; GH.queued = false; paintSync();
   const url = 'https://api.github.com/repos/' + GH.cfg.repo + '/contents/grimoire-notes.json';
-  const H = { Authorization: 'Bearer ' + GH.cfg.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+  const H = { Authorization: 'Bearer ' + GH.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
   try {
     let ok = false;
     for (let attempt = 0; attempt < 3 && !ok; attempt++) {
@@ -1099,6 +1149,8 @@ function fillSyncPop() {
   }
   if (st === 'error' && S.sync.error === 'quota_exceeded') extra = '<p>Le carnet est plein. Supprime quelques notes pour libérer de la place.</p>';
   if (st === 'error' && S.sync.error === 'invalid_argument') extra = "<p>L'écriture est refusée pour ton accès à cette page. Il faut au moins le rôle Contributeur.</p>";
+  if (GH.lost) extra += "<p><b>Synchronisation GitHub en pause :</b> le jeton n'est plus dans le coffre de cet appareil. Menu ⋯ puis « Synchroniser via GitHub » pour le redonner.</p>";
+  else if (GH.unavail) extra += "<p><b>Synchronisation GitHub en pause :</b> le coffre du système ne répond pas. Relance l'appli, ou redonne le jeton via le menu ⋯.</p>";
   if (Disk.on) extra += '<p>Dossier des notes : <b style="overflow-wrap:anywhere">' + esc(Disk.path) + '</b></p>';
   $('#syncPop').innerHTML = '<h3>' + SYNC[st][1] + '</h3><p>' + SYNC[st][2] + '</p>' + extra;
 }
@@ -1389,17 +1441,20 @@ function bindUi() {
     closePops(); ghErr('');
     $('#ghRepo').value = (GH.cfg && GH.cfg.repo) || ''; $('#ghToken').value = '';
     $('#ghToken').placeholder = ghOn() ? 'Déjà enregistré (vide = garder)' : 'github_pat_…';
-    $('#ghOff').hidden = !ghOn();
+    $('#ghOff').hidden = !(ghOn() || GH.lost || GH.unavail);
     if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
   };
   $('#ghCancel').onclick = () => dlg.close();
-  $('#ghOff').onclick = () => { LS.set('grimoire.gh', null); GH.cfg = null; location.reload(); };
-  $('#ghForm').addEventListener('submit', e => {
+  $('#ghOff').onclick = async () => { try { await Secret.del(); } catch (e) { /* rien à effacer ou coffre absent */ } LS.set('grimoire.gh', null); GH.cfg = null; location.reload(); };
+  $('#ghForm').addEventListener('submit', async e => {
     e.preventDefault();
-    const repo = $('#ghRepo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/\/$/, ''), token = $('#ghToken').value.trim() || (GH.cfg && GH.cfg.token) || '';
+    const repo = $('#ghRepo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/\/$/, ''), token = $('#ghToken').value.trim() || GH.token || '';
     if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return ghErr('Le dépôt s\'écrit propriétaire/nom, par exemple LonerFy/grimoire-notes.');
     if (!token) return ghErr('Colle le jeton d\'accès.');
-    LS.set('grimoire.gh', { repo, token }); location.reload();
+    let safe = false;
+    try { await Secret.set(token); safe = (await Secret.get()) === token; } catch (err) { /* coffre indisponible : repli ci-dessous */ }
+    // Sans coffre, le jeton reste dans le stockage de l'appli (comme avant) ; ghLoadToken réessaie à chaque lancement.
+    LS.set('grimoire.gh', safe ? { repo } : { repo, token }); location.reload();
   });
   $('#importFile').addEventListener('change', e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) importFiles(f); });
   document.addEventListener('pointerdown', e => { if (!e.target.closest('.pop')) closePops(); });
