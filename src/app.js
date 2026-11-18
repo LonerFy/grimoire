@@ -1120,7 +1120,7 @@ const SYNC = {
   saving: ['Envoi', 'Enregistrement en cours', "Tes dernières modifications partent vers ton carnet. Cela prend une seconde ou deux."],
   cache: ['Copie locale', 'Copie locale', "Le serveur ne répond pas encore. Tu vois la dernière copie connue sur cet appareil ; elle peut avoir du retard. La mise à jour se fera seule dès que la connexion revient."],
   synced: ['Synchronisé', 'Tout est synchronisé', "Tes notes sont dans ton compte Claude, dans un carnet que toi seul peux lire. Ouvre cette même page sur ton téléphone ou ton PC, connecté au même compte : elles y sont, et chaque modification arrive en direct."],
-  error: ['Non enregistré', 'Enregistrement interrompu', "Les dernières modifications ne sont pas encore parvenues au serveur. Garde la page ouverte : un nouvel essai part tout seul. Par sécurité, exporte tes notes depuis le menu en bas de l'index."]
+  error: ['Synchro en pause', 'Synchronisation interrompue', "Les dernières modifications ne sont pas encore parvenues au serveur. Garde la page ouverte : un nouvel essai part tout seul. Par sécurité, exporte tes notes depuis le menu en bas de l'index."]
 };
 function paintSync() {
   const st = syncState();
