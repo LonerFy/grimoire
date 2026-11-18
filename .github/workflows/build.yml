@@ -69,6 +69,8 @@ jobs:
       - name: Contrôler et rassembler l'APK
         env:
           EXPECTED_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
+          # Sur un tag (release), l'empreinte du certificat est obligatoire : variable absente = échec.
+          REQUIRE_FINGERPRINT: ${{ startsWith(github.ref, 'refs/tags/v') && '1' || '' }}
         run: |
           apks=$(find src-tauri/gen/android -name "*.apk" -path "*release*" ! -name "*unsigned*")
           if [ "$(printf '%s\n' "$apks" | grep -c .)" != "1" ]; then

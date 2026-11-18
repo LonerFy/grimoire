@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Contrôles de l'APK release avant publication. Usage : scripts/check-apk.sh chemin/vers/app.apk
-# Variables : EXPECTED_VERSION (obligatoire), EXPECTED_SHA256 (facultatif), MAX_MB (défaut 40),
+# Variables : EXPECTED_VERSION (obligatoire), EXPECTED_SHA256 (facultatif, obligatoire si REQUIRE_FINGERPRINT=1), MAX_MB (défaut 40),
 #             BUILD_TOOLS (dossier build-tools du SDK). N'affiche que des informations publiques.
 set -euo pipefail
 
@@ -41,6 +41,8 @@ got=$(echo "$sig" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head
 echo "Empreinte du certificat (SHA-256) : $got"
 want=$(printf '%s' "${EXPECTED_SHA256:-}" | tr -d ': \r\n' | tr 'A-F' 'a-f')
 if [ -z "$want" ]; then
+  # Pour une release (REQUIRE_FINGERPRINT=1, posé par le workflow sur les tags), un contrôle sauté ne doit jamais passer en silence.
+  [ "${REQUIRE_FINGERPRINT:-}" != "1" ] || fail "ANDROID_CERT_SHA256 absente alors que l'empreinte est obligatoire (REQUIRE_FINGERPRINT=1) : pas de release sans contrôle de la clé de signature"
   echo "::warning::Variable ANDROID_CERT_SHA256 absente : empreinte affichée mais non vérifiée"
 elif [ "$got" != "$want" ]; then
   fail "empreinte différente de celle attendue. Obtenue : $got ; attendue : $want. Mauvaise clé de signature ?"
