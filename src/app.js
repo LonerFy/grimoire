@@ -770,7 +770,7 @@ function seedNotes() {
       "",
       "Le point à côté du titre **Grimoire** indique l'état : plein quand tout est envoyé, rouge pendant l'envoi.",
       "",
-      "> Si tu modifies la même note sur deux appareils au même instant, la dernière écriture l'emporte.",
+      "> Si tu modifies la même note sur deux appareils en même temps, aucune version n'est perdue : une copie « (conflit …) » garde l'autre version. Relis les deux et garde ce que tu veux.",
       "",
       "Retour à [[Bienvenue]].",
       "",

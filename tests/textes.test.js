@@ -25,3 +25,19 @@ test('chaque code d\'erreur produit par l\'appli a un message', () => {
     assert.ok(Array.isArray(GH_ERRORS[k]) && GH_ERRORS[k][0] && GH_ERRORS[k][1], k);
   }
 });
+
+function seeds() {
+  const i = app.indexOf('function seedNotes()'), j = app.indexOf('\n}\n', i);
+  assert.ok(i >= 0 && j > i);
+  return vm.runInNewContext('(' + app.slice(i, j + 2) + ')()');
+}
+test('note d\'accueil « Synchronisation » : conflit = copie, rien n\'est perdu', () => {
+  const n = seeds().find(x => x.id === 'seed-synchro');
+  assert.ok(n, 'note seed-synchro absente');
+  assert.ok(!/dernière écriture|l'emporte/.test(n.body), 'ancienne règle encore présente');
+  assert.ok(n.body.includes('aucune version n\'est perdue'));
+  assert.ok(n.body.includes('« (conflit …) »'));
+});
+test('aucune note d\'accueil ne promet encore « la dernière écriture »', () => {
+  for (const n of seeds()) assert.ok(!/dernière écriture/.test(n.body), n.id);
+});
