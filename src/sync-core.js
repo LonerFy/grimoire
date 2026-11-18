@@ -59,7 +59,8 @@
   const canon = n => serialize({ id: n.id, title: n.title, body: n.body, pinned: !!n.pinned, created: n.created, updated: n.updated });
   const sameText = (a, b) => a.title === b.title && a.body === b.body;
   const pad = x => String(x).padStart(2, '0');
-  const stamp = t => { const d = new Date(t); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()); };
+  /** Date de la copie de conflit, toujours en UTC (comparable à l'heure des commits, identique quel que soit l'appareil). */
+  const stamp = t => { const d = new Date(t); return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()) + ' ' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ' UTC'; };
 
   /* ---------- interface de stockage ----------
      storage = {

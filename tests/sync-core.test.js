@@ -37,7 +37,7 @@ test('conflit : la version distante garde l\'id, la version locale entière devi
   assert.equal(b.local.get('n1').body, 'ligne 1\nA a changé la ligne 2\nligne 3', 'pas de fusion de lignes : la version distante est intacte');
   const copy = b.local.get(r.conflicts[0].copyId);
   assert.equal(copy.body, 'ligne 1\nligne 2\nB a changé la ligne 3', 'la version locale est conservée en entier');
-  assert.match(copy.title, /^T-n1 \(conflit \d{4}-\d\d-\d\d \d\d:\d\d\)$/);
+  assert.equal(copy.title, 'T-n1 (conflit 2023-11-14 22:13 UTC)'); // now() fixé à 1700000000000
   await a.sync();
   assert.equal(a.local.size, 2); assert.deepEqual(bodies(st), Object.fromEntries([...a.local].map(([id, n]) => [id, n.body])));
 });
@@ -177,5 +177,25 @@ test('propriété : 3 appareils, opérations aléatoires, coupures — aucune mo
       const mine = Object.fromEntries([...d.local].map(([id, n]) => [id, Core.canon(n)]));
       assert.deepEqual(mine, remote, `seed ${seed} : l'appareil ${d.name} n'a pas convergé`);
     }
+  }
+});
+
+test('nom de la copie de conflit : UTC, identique dans tous les fuseaux', () => {
+  const { execFileSync } = require('node:child_process'), path = require('node:path');
+  const code = `
+    const Core = require(${JSON.stringify(path.join(__dirname, '..', 'src', 'sync-core.js'))});
+    const { createMemoryStorage } = require(${JSON.stringify(path.join(__dirname, 'helpers', 'memory-storage.js'))});
+    const { createDevice } = require(${JSON.stringify(path.join(__dirname, 'helpers', 'device.js'))});
+    (async () => {
+      const st = createMemoryStorage(), now = () => Date.UTC(2026, 10, 18, 12, 23, 41);
+      const a = createDevice('a', st, { now }), b = createDevice('b', st, { now });
+      const n = (body, u) => ({ id: 'n1', title: 'Monade', body, pinned: false, created: 1, updated: u });
+      a.put(n('x', 10)); await a.sync(); await b.sync();
+      a.put(n('A', 20)); b.put(n('B', 21)); await a.sync();
+      const r = await b.sync(); console.log(b.local.get(r.conflicts[0].copyId).title);
+    })();`;
+  for (const tz of ['UTC', 'America/Chicago', 'Pacific/Kiritimati', 'Pacific/Pago_Pago', 'Asia/Kolkata']) {
+    const out = execFileSync(process.execPath, ['-e', code], { env: { ...process.env, TZ: tz }, encoding: 'utf8' }).trim();
+    assert.equal(out, 'Monade (conflit 2026-11-18 12:23 UTC)', tz);
   }
 });
