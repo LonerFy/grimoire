@@ -14,7 +14,7 @@ Notes liées `[[ ]]`, graphe interactif, synchronisation PC ↔ téléphone. Tau
 1. Crée un dépôt GitHub **privé** vide, par exemple `grimoire-notes`.
 2. GitHub → Settings → Developer settings → Fine-grained tokens : jeton limité à ce seul dépôt, droit **Contents : Read and write**.
 3. Dans Grimoire : menu ⋯ en bas de l'index → « Synchroniser via GitHub ». Colle `proprietaire/grimoire-notes` et le jeton.
-4. Même chose sur l'autre appareil. Les notes passent par le fichier `grimoire-notes.json` du dépôt, en moins d'une minute.
+4. Même chose sur l'autre appareil. Chaque note est un fichier `notes/<id>.md` du dépôt, synchronisé en moins d'une minute. Si deux appareils modifient la même note en même temps, les deux versions sont gardées (une copie « conflit » apparaît). Si ton dépôt est encore à l'ancien format (un seul `grimoire-notes.json`), Grimoire te propose de migrer : clone d'abord ton dépôt par sécurité.
 
 ## Développer
 Prérequis : Node 20, Rust, et les prérequis Tauri 2 de ton système.

@@ -9,7 +9,20 @@ permissions:
   contents: write
 
 jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 } # les tags : un test rejoue le vrai code de la 1.3.2
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: for f in src/*.js mcp/server.js; do node --check "$f"; done
+      - run: npm ci --prefix mcp
+      # Pas de GRIMOIRE_TEST_TOKEN ici : le test réel sur le dépôt jetable reste local.
+      - run: npm test
+
   android:
+    needs: tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +87,7 @@ jobs:
         with: { files: out/Grimoire.apk }
 
   windows:
+    needs: tests
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
