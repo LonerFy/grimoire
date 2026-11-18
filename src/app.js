@@ -768,7 +768,7 @@ function seedNotes() {
       "2. Menu ⋯ en bas de l'index, puis « Synchroniser via GitHub ». Colle le dépôt et le jeton.",
       "3. Fais pareil sur l'autre appareil. Ce que tu écris d'un côté arrive de l'autre en moins d'une minute.",
       "",
-      "Le point à côté du titre **Grimoire** indique l'état : plein quand tout est envoyé, rouge pendant l'envoi.",
+      "Le badge à côté du titre **Grimoire** indique l'état : « Synchronisé » quand tout est envoyé, « Envoi » pendant l'envoi, et « Synchro en pause » (point rouge) quand la synchro est bloquée. Touche le badge pour voir pourquoi : tes notes restent sur l'appareil et repartent toutes seules ensuite.",
       "",
       "> Si tu modifies la même note sur deux appareils en même temps, aucune version n'est perdue : une copie « (conflit …) » garde l'autre version. Relis les deux et garde ce que tu veux.",
       "",

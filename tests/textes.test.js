@@ -46,3 +46,10 @@ test('note d\'accueil « Synchronisation » : conflit = copie, rien n\'est perdu
 test('aucune note d\'accueil ne promet encore « la dernière écriture »', () => {
   for (const n of seeds()) assert.ok(!/dernière écriture/.test(n.body), n.id);
 });
+
+test('note d\'accueil « Synchronisation » : le badge décrit les vrais libellés', () => {
+  const n = seeds().find(x => x.id === 'seed-synchro');
+  assert.ok(!/rouge pendant l'envoi|Le point à côté/.test(n.body), 'ancienne description du point');
+  for (const lib of [SYNC.synced[0], SYNC.saving[0], SYNC.error[0]]) assert.ok(n.body.includes('« ' + lib + ' »'), 'libellé « ' + lib + ' » absent de la note');
+  assert.ok(n.body.includes('(point rouge)'));
+});
