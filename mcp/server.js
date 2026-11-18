@@ -6,9 +6,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { readFile, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+// Même cœur que l'appli (format des notes, empreintes) : le dépôt doit être cloné en entier, mcp/ à côté de src/.
+const require = createRequire(import.meta.url);
+const Core = require('../src/sync-core.js'), GHStore = require('../src/github-store.js');
 
 const REPO = process.env.GRIMOIRE_REPO, TOKEN = process.env.GRIMOIRE_TOKEN, FILE = process.env.GRIMOIRE_FILE;
 const PATH = process.env.GRIMOIRE_PATH || 'grimoire-notes.json';
+const API = process.env.GRIMOIRE_API_BASE || 'https://api.github.com'; // surchargé uniquement par les tests
 const READ_ONLY = /^(1|true|yes)$/i.test(process.env.GRIMOIRE_READ_ONLY || '');
 if (!FILE && !(REPO && TOKEN)) {
   console.error('Grimoire MCP : définis GRIMOIRE_REPO (proprietaire/nom) et GRIMOIRE_TOKEN, ou GRIMOIRE_FILE (chemin d\'un export .json).');
@@ -20,7 +25,7 @@ const empty = () => ({ app: 'grimoire', v: 1, notes: [], deleted: {} });
 const clean = d => ({ app: 'grimoire', v: 1, notes: Array.isArray(d?.notes) ? d.notes.filter(n => n && n.id) : [], deleted: d?.deleted && typeof d.deleted === 'object' ? d.deleted : {} });
 
 const gh = {
-  url: () => `https://api.github.com/repos/${REPO}/contents/${PATH}`,
+  url: () => `${API}/repos/${REPO}/contents/${PATH}`,
   headers: () => ({ Authorization: `Bearer ${TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'grimoire-mcp' }),
   async load() {
     const r = await fetch(gh.url(), { headers: gh.headers() });
@@ -49,14 +54,50 @@ const local = {
   },
   async save(data) { await writeFile(FILE, JSON.stringify(data, null, 2)); return true; }
 };
-const store = FILE ? local : gh;
+
+/* Disposition 2 : une note = notes/<id>.md, un commit atomique par écriture. grimoire-notes.json n'est jamais touché
+   (marqueur non JSON) ; un dépôt encore à l'ancien format reste lu et écrit à l'ancienne tant que l'appli ne l'a pas migré. */
+const versionOf = n => GHStore.gitHash(Core.canon(n));
+const noteCache = new Map(); // empreinte du fichier -> note (un fichier git est immuable : on ne relit que ce qui a changé)
+let v2;
+const ghErr = e => {
+  if (e && (e.status === 401 || e.status === 403)) return new Error('GitHub refuse le jeton : vérifie qu\'il n\'a pas expiré et qu\'il a le droit Contents en lecture et écriture sur ce dépôt.');
+  if (e && e.status === 404) return new Error('GitHub ne trouve pas ce dépôt avec ce jeton.');
+  return new Error(`GitHub n'a pas répondu comme prévu${e && e.status ? ' (' + e.status + ')' : ''}. Rien n'a été modifié.`);
+};
+const github = {
+  async load() {
+    v2 = v2 || GHStore.create({ repo: REPO, token: TOKEN, apiBase: API });
+    let l;
+    try { l = await v2.list(); } catch (e) { throw ghErr(e); }
+    if (l.root === 'other' && Core.isLegacy(l.rootText) && !Object.keys(l.notes).length) { const r = await gh.load(); return { data: r.data, sha: { legacy: r.sha } }; }
+    if (l.root === 'other' && Core.isLegacy(l.rootText)) throw new Error('Le dépôt contient à la fois notes/ et un grimoire-notes.json en ancien format : il faut régler ça dans Grimoire avant. Rien n\'a été modifié.');
+    const todo = Object.keys(l.notes).filter(id => !noteCache.has(l.notes[id]));
+    try { const got = await v2.read(todo); for (const id of todo) { const n = got[id] === undefined ? null : Core.parse(got[id]); noteCache.set(l.notes[id], n && n.id === id ? n : null); } }
+    catch (e) { throw ghErr(e); }
+    const notes = [], versions = {};
+    for (const id of Object.keys(l.notes)) { const n = noteCache.get(l.notes[id]); if (n) { notes.push({ ...n }); versions[id] = await versionOf(n); } }
+    return { data: { app: 'grimoire', v: 1, notes, deleted: {} }, sha: { head: l.head, versions, rootAbsent: l.root === 'absent' } };
+  },
+  async save(data, tok, message) {
+    if (tok.legacy !== undefined) return gh.save(data, tok.legacy, message);
+    const writes = {}, deletes = [], seen = new Set();
+    for (const n of data.notes) { seen.add(n.id); const text = Core.canon(n); if (tok.versions[n.id] !== await GHStore.gitHash(text)) writes[n.id] = text; }
+    for (const id of Object.keys(tok.versions)) if (!seen.has(id)) deletes.push(id);
+    if (!Object.keys(writes).length && !deletes.length) return true;
+    try { await v2.commit({ head: tok.head, writes, deletes, extra: tok.rootAbsent ? { [Core.ROOT_FILE]: Core.MARKER } : {}, message }); return true; }
+    catch (e) { if (e && e.code === 'stale') return false; throw ghErr(e); }
+  }
+};
+const store = FILE ? local : github;
+
 
 /** Lit, applique `fn` (qui modifie data et renvoie un résultat), écrit. Réessaie si un autre appareil a écrit entre-temps. */
 async function mutate(message, fn) {
   if (READ_ONLY) throw new Error('Ce serveur est en lecture seule (GRIMOIRE_READ_ONLY).');
   for (let i = 0; i < 4; i++) {
     const { data, sha } = await store.load();
-    const result = fn(data);
+    const result = await fn(data);
     if (await store.save(data, sha, message)) return result;
   }
   throw new Error('Conflit d\'écriture répété avec un autre appareil. Réessaie dans un instant.');
@@ -103,10 +144,15 @@ const brief = n => ({ id: n.id, title: n.title || 'Sans titre', pinned: !!n.pinn
 const ok = v => ({ content: [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }] });
 const fail = e => ({ isError: true, content: [{ type: 'text', text: e.message || String(e) }] });
 const safe = fn => async args => { try { return ok(await fn(args)); } catch (e) { return fail(e); } };
+/** Refuse si la note a changé depuis la lecture de l'agent (jamais d'écrasement à l'aveugle). */
+async function checkBase(n, base) {
+  const cur = await versionOf(n);
+  if (base !== cur) throw new Error(`La note « ${n.title || 'Sans titre'} » a changé depuis ta lecture (version actuelle : ${cur}). Relis-la avec read_note, puis réessaie avec sa nouvelle version. Rien n'a été modifié.`);
+}
 const titleOf = (notes, id) => notes.find(n => n.id === id)?.title || 'Sans titre';
 
 /* ---------- outils ---------- */
-const server = new McpServer({ name: 'grimoire', version: '1.0.0' });
+const server = new McpServer({ name: 'grimoire', version: '1.1.0' });
 const RO = { readOnlyHint: true, openWorldHint: false }, RW = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
 
 server.registerTool('list_notes', {
@@ -140,14 +186,14 @@ server.registerTool('search_notes', {
 
 server.registerTool('read_note', {
   title: 'Lire une note',
-  description: 'Renvoie le texte complet (Markdown) d\'une note, avec ses liens sortants, les notes qui la citent et ses étiquettes.',
+  description: 'Renvoie le texte complet (Markdown) d\'une note, sa `version` (à passer en base_version pour la modifier ou la supprimer), ses liens sortants, les notes qui la citent et ses étiquettes.',
   inputSchema: { note: z.string().min(1).describe('Titre ou id de la note') },
   annotations: RO
 }, safe(async ({ note }) => {
   const { data } = await store.load(), n = find(data.notes, note), I = index(data.notes);
   const unresolved = [...new Set(parse(n.body).links.filter(t => !I.title.has(norm(t))))];
   return {
-    ...brief(n), created: iso(n.created), body: n.body || '',
+    ...brief(n), version: await versionOf(n), created: iso(n.created), body: n.body || '',
     linksTo: [...(I.out.get(n.id) || [])].map(id => ({ id, title: titleOf(data.notes, id) })),
     linkedFrom: [...(I.back.get(n.id) || [])].map(id => ({ id, title: titleOf(data.notes, id) })),
     linksToMissingNotes: unresolved
@@ -172,10 +218,11 @@ server.registerTool('create_note', {
 server.registerTool('update_note', {
   title: 'Modifier une note',
   description: 'Remplace le titre, le corps ou l\'épinglage d\'une note. Le corps fourni remplace entièrement l\'ancien : lis la note avant, ou utilise append_to_note pour seulement ajouter. Renommer met à jour les [[liens]] des autres notes.',
-  inputSchema: { note: z.string().min(1).describe('Titre ou id de la note'), title: z.string().min(1).max(200).optional().describe('Nouveau titre'), body: z.string().optional().describe('Nouveau contenu complet en Markdown'), pinned: z.boolean().optional() },
+  inputSchema: { note: z.string().min(1).describe('Titre ou id de la note'), base_version: z.string().min(1).describe('Champ `version` renvoyé par read_note : la modification est refusée si la note a changé depuis'), title: z.string().min(1).max(200).optional().describe('Nouveau titre'), body: z.string().optional().describe('Nouveau contenu complet en Markdown'), pinned: z.boolean().optional() },
   annotations: { ...RW, destructiveHint: true }
-}, safe(async ({ note, title, body, pinned }) => mutate(`mcp: modifier « ${note} »`, data => {
+}, safe(async ({ note, base_version, title, body, pinned }) => mutate(`mcp: modifier « ${note} »`, async data => {
   const n = find(data.notes, note), now = Date.now(); let relinked = 0;
+  await checkBase(n, base_version);
   if (title !== undefined) {
     const t = title.replace(/[\[\]|\n]/g, '').trim(), old = norm(n.title);
     if (!t) throw new Error('Le titre est vide après nettoyage.');
@@ -203,16 +250,17 @@ server.registerTool('update_note', {
 server.registerTool('append_to_note', {
   title: 'Ajouter à une note',
   description: 'Ajoute du texte à la fin d\'une note sans toucher au reste. Avec create_if_missing, crée la note si elle n\'existe pas (pratique pour un journal ou une boîte de réception).',
-  inputSchema: { note: z.string().min(1).describe('Titre ou id de la note'), text: z.string().min(1).describe('Texte Markdown à ajouter'), create_if_missing: z.boolean().optional().describe('Créer la note si aucun titre ne correspond') },
+  inputSchema: { note: z.string().min(1).describe('Titre ou id de la note'), text: z.string().min(1).describe('Texte Markdown à ajouter'), create_if_missing: z.boolean().optional().describe('Créer la note si aucun titre ne correspond'), base_version: z.string().min(1).optional().describe('Facultatif : champ `version` de read_note ; l\'ajout est refusé si la note a changé depuis') },
   annotations: RW
-}, safe(async ({ note, text, create_if_missing = false }) => mutate(`mcp: ajouter à « ${note} »`, data => {
+}, safe(async ({ note, text, create_if_missing = false, base_version }) => mutate(`mcp: ajouter à « ${note} »`, async data => {
   const now = Date.now(); let n;
   try { n = find(data.notes, note); }
   catch (e) {
     if (!create_if_missing || /Plusieurs notes/.test(e.message)) throw e;
     n = { id: newId(), title: note.replace(/[\[\]|\n]/g, '').trim(), body: '', pinned: false, created: now, updated: now };
-    data.notes.push(n);
+    data.notes.push(n); base_version = undefined;
   }
+  if (base_version) await checkBase(n, base_version);
   n.body = n.body ? n.body.replace(/\s+$/, '') + '\n\n' + text : text; n.updated = now;
   return { updated: brief(n), length: n.body.length };
 })));
@@ -220,10 +268,11 @@ server.registerTool('append_to_note', {
 server.registerTool('delete_note', {
   title: 'Supprimer une note',
   description: 'Supprime définitivement une note sur tous les appareils. Les liens des autres notes vers elle deviennent des liens « à écrire ».',
-  inputSchema: { note: z.string().min(1).describe('Titre ou id de la note') },
+  inputSchema: { note: z.string().min(1).describe('Titre ou id de la note'), base_version: z.string().min(1).describe('Champ `version` renvoyé par read_note : la suppression est refusée si la note a changé depuis') },
   annotations: { ...RW, destructiveHint: true }
-}, safe(async ({ note }) => mutate(`mcp: supprimer « ${note} »`, data => {
+}, safe(async ({ note, base_version }) => mutate(`mcp: supprimer « ${note} »`, async data => {
   const n = find(data.notes, note);
+  await checkBase(n, base_version);
   data.notes = data.notes.filter(o => o.id !== n.id); data.deleted[n.id] = Date.now();
   return { deleted: { id: n.id, title: n.title } };
 })));
