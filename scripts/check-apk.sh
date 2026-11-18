@@ -8,7 +8,7 @@ apk="${1:?chemin de l APK manquant}"
 max_mb="${MAX_MB:-40}"
 tools="${BUILD_TOOLS:?BUILD_TOOLS manquant}"
 want_version="${EXPECTED_VERSION:?EXPECTED_VERSION manquant}"
-min_code="${MIN_VERSION_CODE:-1004000}"   # 1.4.0 = 1004000 avec la formule de Tauri (major*1000000 + minor*1000 + patch)
+min_code="${MIN_VERSION_CODE:-1004001}"   # 1.4.1 = 1004001 avec la formule de Tauri (major*1000000 + minor*1000 + patch)
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 fail() { echo "::error::$*"; exit 1; }
 
@@ -54,6 +54,6 @@ code=$(echo "$badging" | sed -n "s/^package:.* versionCode='\([0-9]*\)'.*/\1/p" 
 name=$(echo "$badging" | sed -n "s/^package:.* versionName='\([^']*\)'.*/\1/p" | head -1)
 echo "versionName=$name versionCode=$code"
 [ "$name" = "$want_version" ] || fail "versionName « $name » au lieu de « $want_version »"
-[ -n "$code" ] && [ "$code" -ge "$min_code" ] || fail "versionCode « $code » inférieur à $min_code : une mise à jour par-dessus 1.3.0 serait refusée"
+[ -n "$code" ] && [ "$code" -ge "$min_code" ] || fail "versionCode « $code » inférieur à $min_code : une mise à jour par-dessus la version attendue serait refusée"
 if echo "$badging" | grep -q 'application-debuggable'; then fail "l'APK est débogable"; fi
 echo "Contrôles de l'APK : tous passés"
