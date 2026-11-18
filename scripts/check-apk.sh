@@ -17,7 +17,7 @@ bytes=$(stat -c %s "$apk")
 mb=$(awk -v b="$bytes" 'BEGIN { printf "%.2f", b / 1048576 }')
 echo "Taille de l'APK : $bytes octets ($mb Mo), plafond $max_mb Mo"
 echo "Les 10 plus gros fichiers (taille compressée) :"
-unzip -lv "$apk" | awk '$1 ~ /^[0-9]+$/ && NF >= 8' | sort -k3 -n -r | head -10 | awk '{ printf "  %10d  %s\n", $3, $8 }'
+unzip -lv "$apk" | awk '$1 ~ /^[0-9]+$/ && NF >= 8' | sort -k3 -n -r | sed -n 1,10p | awk '{ printf "  %10d  %s\n", $3, $8 }'
 [ "$bytes" -le $((max_mb * 1048576)) ] || fail "APK trop gros : $mb Mo (plafond $max_mb Mo)"
 
 # 2. Une seule architecture : arm64-v8a
