@@ -524,7 +524,7 @@ async function seedCloud(vault) {
 }
 
 /* ---------- local vault + GitHub sync ---------- */
-const GH = { cfg: LS.get('grimoire.gh'), token: '', lost: false, unavail: false, insecure: false, tomb: LS.get('grimoire.tomb') || {}, busy: false, queued: false, err: null, timer: 0, last: 0 };
+const GH = { cfg: LS.get('grimoire.gh'), token: '', lost: false, unavail: false, insecure: false, busy: false, queued: false, err: null, timer: 0, last: 0 };
 const ghOn = () => !!(GH.cfg && GH.cfg.repo && GH.token);
 const b64e = s => { const b = new TextEncoder().encode(s); let bin = ''; for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(bin); };
 const b64d = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\s/g, '')), c => c.charCodeAt(0)));
@@ -650,7 +650,7 @@ async function startLocal() {
   S.backend = {
     kind,
     put: async () => { persistVault.now(); if (kind === 'github') ghSchedule(); },
-    del: async id => { if (kind === 'github' || (GH.cfg && GH.cfg.repo)) { GH.tomb[id] = Date.now(); LS.set('grimoire.tomb', GH.tomb); } persistVault.now(); if (kind === 'github') ghSchedule(); }
+    del: async id => { persistVault.now(); if (kind === 'github') ghSchedule(); }
   };
   const saved = Disk.on ? null : LS.get('grimoire.vault');
   if (saved && Array.isArray(saved.notes)) for (const d of saved.notes) { if (d && d.id) S.notes.set(d.id, fromDoc(d.id, d)); }
@@ -665,67 +665,56 @@ async function startLocal() {
 
 function ghSchedule() { clearTimeout(GH.timer); GH.timer = setTimeout(ghSync, 1800); paintSync(); }
 
-function ghMerge(remote) {
-  const changed = new Set(), now = Date.now(), MONTHS2 = 60 * 864e5;
-  const rn = Array.isArray(remote.notes) ? remote.notes : [], rd = remote.deleted && typeof remote.deleted === 'object' ? remote.deleted : {};
-  const dels = Object.assign({}, rd);
-  for (const [id, ts] of Object.entries(GH.tomb)) if ((dels[id] || 0) < ts) dels[id] = ts;
-  for (const d of rn) {
-    if (!d || !d.id) continue;
-    const ts = dels[d.id], ru = +d.updated || 0, cur = S.notes.get(d.id), busy = dirty.has(d.id) || saving.has(d.id);
-    if (ts && ts >= ru) { if (cur && !busy && cur.updated <= ts) { S.notes.delete(d.id); changed.add(d.id); } continue; }
-    if (!cur) { S.notes.set(d.id, fromDoc(d.id, d)); changed.add(d.id); }
-    else if (!busy && ru > cur.updated) { S.notes.set(d.id, fromDoc(d.id, d)); changed.add(d.id); }
-  }
-  for (const [id, ts] of Object.entries(dels)) {
-    const cur = S.notes.get(id);
-    if (cur && cur.updated <= ts && !dirty.has(id) && !saving.has(id)) { S.notes.delete(id); changed.add(id); }
-  }
-  const notes = [...S.notes.values()].map(n => Object.assign({ id: n.id }, toDoc(n)));
-  const deleted = {};
-  for (const [id, ts] of Object.entries(dels)) { const n = S.notes.get(id); if (now - ts < MONTHS2 && (!n || n.updated <= ts)) deleted[id] = ts; }
-  const rmap = new Map(rn.map(d => [d.id, d]));
-  let push = rn.length !== notes.length || Object.keys(rd).length !== Object.keys(deleted).length;
-  if (!push) for (const n of notes) { const r = rmap.get(n.id); if (!r || r.updated !== n.updated || r.title !== n.title || r.body !== n.body || !!r.pinned !== n.pinned) { push = true; break; } }
-  if (!push) for (const id of Object.keys(deleted)) if (rd[id] !== deleted[id]) { push = true; break; }
-  GH.tomb = deleted; LS.set('grimoire.tomb', deleted);
-  return { out: { app: 'grimoire', v: 1, notes, deleted }, changed, push };
-}
+/* Synchro GitHub : une note = un fichier notes/<id>.md, un commit atomique par passe (voir sync-core.js et github-store.js).
+   L'état { repo, base } mémorise, note par note, la dernière version synchronisée ; il ne contient aucun texte de note. */
+const ghState = () => { const s = LS.get('grimoire.sync2'); return s && s.repo === GH.cfg.repo && s.base && typeof s.base === 'object' ? s : { repo: GH.cfg.repo, base: {} }; };
+const ghStore = () => GH.store || (GH.store = GrimoireGitHub.create({ repo: GH.cfg.repo, token: GH.token }));
+const ghErrCode = e => e && (e.code === 'legacy' || e.code === 'legacy-mixed' || e.code === 'massdelete' || e.code === 'conflict') ? e.code.replace('-', '')
+  : e && e.status === 401 ? 'auth' : e && e.status === 403 ? 'auth' : e && e.status === 404 ? 'repo' : 'net';
 
-async function ghSync() {
+async function ghSync(opts) {
   if (!ghOn() || !S.backend || S.backend.kind !== 'github') return;
   if (GH.busy) { GH.queued = true; return; }
   GH.busy = true; GH.queued = false; paintSync();
-  const url = 'https://api.github.com/repos/' + GH.cfg.repo + '/contents/grimoire-notes.json';
-  const H = { Authorization: 'Bearer ' + GH.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
   try {
-    let ok = false;
-    for (let attempt = 0; attempt < 3 && !ok; attempt++) {
-      const r = await fetch(url, { headers: H, cache: 'no-store' });
-      let sha = null, remote = { notes: [], deleted: {} };
-      if (r.status === 200) {
-        const j = await r.json(); sha = j.sha;
-        try { remote = JSON.parse(b64d(j.content || '')); } catch (e) { throw { code: 'badfile' }; }
-      } else if (r.status !== 404) throw { code: 'http', status: r.status };
-      const m = ghMerge(remote);
-      if (m.push) {
-        const body = { message: 'sync ' + new Date().toISOString(), content: b64e(JSON.stringify(m.out)) };
-        if (sha) body.sha = sha;
-        const w = await fetch(url, { method: 'PUT', headers: Object.assign({ 'Content-Type': 'application/json' }, H), body: JSON.stringify(body) });
-        if (w.status === 409 || w.status === 422) { if (m.changed.size) afterRemote(m.changed); continue; }
-        if (!w.ok) throw { code: 'http', status: w.status };
-      }
-      persistVault.now();
-      if (m.changed.size) afterRemote(m.changed);
-      ok = true;
-    }
-    if (!ok) throw { code: 'conflict' };
-    GH.err = null; GH.last = Date.now();
+    const r = await GrimoireSync.sync({
+      storage: ghStore(), local: S.notes, state: ghState(), newId,
+      busy: id => dirty.has(id) || saving.has(id), allowMass: !!(opts && opts.allowMass), message: 'sync'
+    });
+    const changed = new Set();
+    for (const [id, n] of r.toLocal) { S.notes.set(id, fromDoc(id, n)); changed.add(id); }
+    for (const id of r.removeLocal) { S.notes.delete(id); changed.add(id); }
+    persistVault.now();
+    LS.set('grimoire.sync2', { repo: GH.cfg.repo, base: r.state.base }); // après l'application locale : une coupure entre les deux se rattrape sans conflit
+    if (changed.size) afterRemote(changed);
+    if (r.conflicts.length) toast(r.conflicts.length === 1
+      ? 'Conflit sur « ' + r.conflicts[0].title + ' » : ta version est gardée dans une copie « (conflit …) ».'
+      : r.conflicts.length + ' notes modifiées en même temps ailleurs : tes versions sont gardées dans des copies « (conflit …) ».', { ms: 12000 });
+    GH.err = null; GH.last = Date.now(); GH.info = r.invalid.length ? r.invalid.length + ' fichier(s) illisible(s) dans notes/ ignoré(s).' : '';
   } catch (e) {
-    GH.err = e && e.code === 'badfile' ? 'badfile' : e && e.status === 401 ? 'auth' : e && e.status === 403 ? 'auth' : e && e.status === 404 ? 'repo' : e && e.code === 'conflict' ? 'conflict' : 'net';
+    GH.err = ghErrCode(e); GH.errInfo = e || {};
+    if (GH.err === 'legacy' && !GH.legacyShown) { GH.legacyShown = true; toast("Ton dépôt GitHub est encore à l'ancien format (un seul fichier). La synchro est en pause, tes notes locales sont intactes. Clone ton dépôt avant de migrer.", { ms: 60000, action: 'Migrer', fn: ghMigrate }); }
+    if (GH.err === 'massdelete' && !GH.massShown) { GH.massShown = true; toast('Cette synchro supprimerait ' + (e.deleteRemote ? e.deleteRemote + ' notes sur GitHub' : e.deleteLocal + ' notes ici') + '. Ça ressemble à une erreur : rien n\'a été supprimé.', { ms: 60000, action: 'Confirmer', fn: () => { GH.massShown = false; ghSync({ allowMass: true }); } }); }
   }
   GH.busy = false; paintSync();
   if (GH.queued) ghSchedule();
+}
+
+/* Migration de l'ancien grimoire-notes.json : un commit atomique (notes + sauvegarde dans legacy/ + marqueur), puis relecture et comparaison. */
+async function ghMigrate() {
+  if (!ghOn() || GH.busy) return;
+  GH.busy = true; paintSync();
+  try {
+    const st = ghStore(), root = await st.readRoot();
+    const res = await GrimoireSync.migrate({ storage: st, legacyText: root });
+    GH.err = null; GH.legacyShown = false;
+    toast('Migration terminée et vérifiée : ' + plural(res.count, 'note', 'notes') + '. L\'ancien fichier est conservé dans ' + res.legacyName + '.', { ms: 15000 });
+  } catch (e) {
+    const M = { 'legacy-illisible': "Le fichier grimoire-notes.json est illisible : rien n'a été modifié.", 'legacy-ids': 'Des notes ont un identifiant invalide (' + ((e.ids || []).slice(0, 3).join(', ')) + ') : rien n\'a été modifié.', 'deja-migre': 'Le dépôt contient déjà un dossier notes/ : rien n\'a été modifié.', verif: 'La relecture ne correspond pas : rien n\'est perdu (ancien fichier conservé), mais ne synchronise pas avant vérification.' };
+    toast('Migration interrompue. ' + (M[e && e.code] || "Pas de connexion à GitHub ou accès refusé : rien n'a été modifié."), { ms: 15000 });
+  }
+  GH.busy = false; paintSync();
+  ghSync();
 }
 
 function seedNotes() {
@@ -1142,9 +1131,14 @@ function paintSync() {
 function fillSyncPop() {
   const st = syncState(); let extra = '';
   if (S.backend && S.backend.kind === 'github') {
-    const E = { auth: ['Jeton refusé', "GitHub refuse le jeton. Vérifie qu'il n'a pas expiré et qu'il a le droit Contents en lecture et écriture sur ce dépôt."], repo: ['Dépôt introuvable', "GitHub ne trouve pas ce dépôt avec ce jeton. Vérifie l'orthographe (propriétaire/nom) et que le jeton couvre ce dépôt."], net: ['Hors ligne', "Pas de connexion à GitHub pour le moment. Tes notes sont gardées ici et partiront dès que le réseau revient."], conflict: ['Conflit', "Deux appareils écrivaient en même temps. Un nouvel essai part tout seul."], badfile: ['Fichier illisible', "Le fichier grimoire-notes.json du dépôt est abîmé. Rien n'est écrasé : restaure-le depuis l'historique du dépôt."] };
-    if (GH.err) { $('#syncPop').innerHTML = '<h3>' + E[GH.err][0] + '</h3><p>' + E[GH.err][1] + '</p>'; return; }
-    $('#syncPop').innerHTML = (Disk.on ? '<p>Dossier des notes : <b style="overflow-wrap:anywhere">' + esc(Disk.path) + '</b></p>' : '') + '<h3>' + SYNC[st][1] + '</h3><p>' + (st === 'saving' ? 'Envoi vers GitHub en cours.' : 'Tes notes sont dans ton dépôt GitHub' + (GH.last ? ', vérifié ' + ago(GH.last) : '') + '. Les autres appareils les recevront en moins d\'une minute.') + '</p>';
+    const E = { auth: ['Jeton refusé', "GitHub refuse le jeton. Vérifie qu'il n'a pas expiré et qu'il a le droit Contents en lecture et écriture sur ce dépôt."], repo: ['Dépôt introuvable', "GitHub ne trouve pas ce dépôt avec ce jeton. Vérifie l'orthographe (propriétaire/nom) et que le jeton couvre ce dépôt."], net: ['Hors ligne', "Pas de connexion à GitHub pour le moment. Tes notes sont gardées ici et partiront dès que le réseau revient."], conflict: ['Conflit', "Deux appareils écrivaient en même temps. Un nouvel essai part tout seul."], legacy: ['Dépôt à l\'ancien format', "Ton dépôt contient encore l'ancien fichier unique grimoire-notes.json. La synchro est en pause, tes notes locales sont intactes. Clone ton dépôt (sauvegarde), puis migre : l'ancien fichier est conservé dans legacy/."], legacymixed: ['Dépôt incohérent', "Le dépôt contient à la fois des notes/ et un grimoire-notes.json en ancien format (une ancienne version de Grimoire a dû y écrire). Rien n'est écrasé : regarde l'historique du dépôt avant de continuer."], massdelete: ['Suppression massive bloquée', "Cette synchro supprimerait beaucoup de notes d'un coup : ça ressemble à une erreur (dossier vidé ?). Rien n'a été supprimé. Si c'est voulu, confirme."] };
+    if (GH.err) {
+      const m = E[GH.err] || E.net, act = GH.err === 'legacy' ? 'Migrer maintenant' : GH.err === 'massdelete' ? 'Confirmer la suppression' : '';
+      $('#syncPop').innerHTML = '<h3>' + m[0] + '</h3><p>' + m[1] + '</p>' + (act ? '<p><button type="button" id="ghAct" class="btn">' + act + '</button></p>' : '');
+      const b = $('#ghAct'); if (b) b.onclick = () => { closePops(); if (GH.err === 'legacy') ghMigrate(); else { GH.massShown = false; ghSync({ allowMass: true }); } };
+      return;
+    }
+    $('#syncPop').innerHTML = (Disk.on ? '<p>Dossier des notes : <b style="overflow-wrap:anywhere">' + esc(Disk.path) + '</b></p>' : '') + '<h3>' + SYNC[st][1] + '</h3><p>' + (st === 'saving' ? 'Envoi vers GitHub en cours.' : 'Tes notes sont dans ton dépôt GitHub' + (GH.last ? ', vérifié ' + ago(GH.last) : '') + '. Les autres appareils les recevront en moins d\'une minute.') + '</p>' + (GH.info ? '<p>' + esc(GH.info) + '</p>' : '');
     return;
   }
   if (st === 'error' && S.sync.error === 'quota_exceeded') extra = '<p>Le carnet est plein. Supprime quelques notes pour libérer de la place.</p>';
