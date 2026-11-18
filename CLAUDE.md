@@ -35,5 +35,15 @@ Appli de notes liées (`[[ ]]`), graphe interactif, synchronisation PC ↔ tél�
 ## Android
 Les notes vont dans `Documents/Grimoire` si l'utilisateur accorde « Accès à tous les fichiers » (invite au premier lancement). Sinon elles restent dans le stockage privé et `vault::migrate` les reprend dans Documents dès que l'accès est accordé (copie, vérification, puis suppression de l'ancien).
 
+## État
+- Synchro par note (point 3 de la feuille de route) : **terminée et validée en conditions réelles** : un fichier `notes/<id>.md` par note, copies de conflit nommées en UTC, migration sans perte.
+- Version **1.4.1** publiée : tag `v1.4.1` sur le commit `d2cb819` (release GitHub avec APK signé et installeurs Windows).
+- Dépôt réel `LonerFy/grimoire-notes` **migré au nouveau format** (commit `3a8bca1`, 2026-11-18). L'ancien JSON est conservé dans `legacy/`. PC et téléphone y sont branchés, avec un jeton par appareil.
+
+## Points ouverts
+- `mcp/server.js` importe `../src/sync-core.js` et `../src/github-store.js` : il exige le **clone complet** du dépôt, il ne peut pas être copié seul.
+- `scripts/verify-migration.js` est **verrouillé sur le dépôt de test** (`LonerFy/grimoire-notes-test`) : il refuse tout autre dépôt. Pour vérifier le dépôt réel, il faudra un paramètre explicite et prudent, pas un simple changement de constante.
+- Les builds Android et Windows ne sont pas reproductibles à l'octet près (même commit, fichiers différents d'un run à l'autre) : l'APK d'une release n'est pas celui d'un run de test. Contrôler l'APK publié avec `scripts/check-apk.sh`.
+
 ## Suite prévue
 1. Images et pièces jointes, corbeille, historique.
