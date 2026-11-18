@@ -8,7 +8,7 @@ apk="${1:?chemin de l APK manquant}"
 max_mb="${MAX_MB:-40}"
 tools="${BUILD_TOOLS:?BUILD_TOOLS manquant}"
 want_version="${EXPECTED_VERSION:?EXPECTED_VERSION manquant}"
-min_code="${MIN_VERSION_CODE:-1003001}"   # 1.3.0 = 1003000 avec la formule de Tauri (major*1000000 + minor*1000 + patch)
+min_code="${MIN_VERSION_CODE:-1004000}"   # 1.4.0 = 1004000 avec la formule de Tauri (major*1000000 + minor*1000 + patch)
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 fail() { echo "::error::$*"; exit 1; }
 
