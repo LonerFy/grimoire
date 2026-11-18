@@ -42,3 +42,11 @@ test('empreinte git identique à git hash-object', async () => {
   assert.equal(await gitHash(''), 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391');
   assert.equal(await gitHash('é'), (await import('node:child_process')).execSync('printf "é" | git hash-object --stdin').toString().trim());
 });
+test('repli SHA-1 en JS pur identique à WebCrypto (vecteurs et textes aléatoires)', async () => {
+  const { sha1 } = require('../src/github-store.js'), nodeCrypto = require('node:crypto'), enc = new TextEncoder();
+  assert.equal(sha1(enc.encode('abc')), 'a9993e364706816aba3e25717850c26c9cd0d89d');
+  assert.equal(sha1(enc.encode('')), 'da39a3ee5e6b4b0d3255bfef95601890afd80709');
+  for (const len of [1, 55, 56, 63, 64, 65, 119, 120, 1000, 5000]) {
+    const b = nodeCrypto.randomBytes(len); assert.equal(sha1(b), nodeCrypto.createHash('sha1').update(b).digest('hex'), 'longueur ' + len);
+  }
+});

@@ -11,11 +11,30 @@
 
   const enc = new TextEncoder(), dec = new TextDecoder();
   const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+  /** SHA-1 en JS pur : repli si WebCrypto est absent (contexte non sécurisé dans certains webviews). */
+  function sha1(bytes) {
+    const l = bytes.length, n = ((l + 8) >> 6) + 1, w = new Int32Array(n * 16), rol = (x, c) => (x << c) | (x >>> (32 - c));
+    for (let i = 0; i < l; i++) w[i >> 2] |= bytes[i] << (24 - (i % 4) * 8);
+    w[l >> 2] |= 0x80 << (24 - (l % 4) * 8); w[n * 16 - 1] = l * 8;
+    let h0 = 0x67452301, h1 = 0xefcdab89 | 0, h2 = 0x98badcfe | 0, h3 = 0x10325476, h4 = 0xc3d2e1f0 | 0; const x = new Int32Array(80);
+    for (let b = 0; b < n * 16; b += 16) {
+      for (let t = 0; t < 80; t++) x[t] = t < 16 ? w[b + t] : rol(x[t - 3] ^ x[t - 8] ^ x[t - 14] ^ x[t - 16], 1);
+      let a = h0, bb = h1, c = h2, d = h3, e = h4;
+      for (let t = 0; t < 80; t++) {
+        const f = t < 20 ? (bb & c) | (~bb & d) : t < 40 ? bb ^ c ^ d : t < 60 ? (bb & c) | (bb & d) | (c & d) : bb ^ c ^ d;
+        const k = t < 20 ? 0x5a827999 : t < 40 ? 0x6ed9eba1 : t < 60 ? 0x8f1bbcdc | 0 : 0xca62c1d6 | 0;
+        const tmp = (rol(a, 5) + f + e + k + x[t]) | 0; e = d; d = c; c = rol(bb, 30); bb = a; a = tmp;
+      }
+      h0 = (h0 + a) | 0; h1 = (h1 + bb) | 0; h2 = (h2 + c) | 0; h3 = (h3 + d) | 0; h4 = (h4 + e) | 0;
+    }
+    return [h0, h1, h2, h3, h4].map(v => (v >>> 0).toString(16).padStart(8, '0')).join('');
+  }
   /** Empreinte « blob » de git : sha1("blob <octets>\0" + contenu). C'est la version GitHub du fichier. */
   async function gitHash(text) {
     const body = enc.encode(text), head = enc.encode('blob ' + body.length + '\0'), all = new Uint8Array(head.length + body.length);
     all.set(head); all.set(body, head.length);
-    return hex(await crypto.subtle.digest('SHA-1', all));
+    if (typeof crypto !== 'undefined' && crypto.subtle && crypto.subtle.digest) return hex(await crypto.subtle.digest('SHA-1', all));
+    return sha1(all);
   }
   const b64e = s => { const b = enc.encode(s); let bin = ''; for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(bin); };
   const b64d = s => dec.decode(Uint8Array.from(atob(String(s).replace(/\s/g, '')), c => c.charCodeAt(0)));
@@ -134,5 +153,5 @@
     return { hash: gitHash, list, read, commit, readRoot: async () => { const l = await list(); return l.rootText; } };
   }
 
-  return { create, gitHash, b64e, b64d };
+  return { create, gitHash, sha1, b64e, b64d };
 });
