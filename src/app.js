@@ -693,7 +693,7 @@ async function ghSync(opts) {
     GH.err = null; GH.last = Date.now(); GH.info = r.invalid.length ? r.invalid.length + ' fichier(s) illisible(s) dans notes/ ignoré(s).' : '';
   } catch (e) {
     GH.err = ghErrCode(e); GH.errInfo = e || {};
-    if (GH.err === 'legacy' && !GH.legacyShown) { GH.legacyShown = true; toast("Ton dépôt GitHub est encore à l'ancien format (un seul fichier). La synchro est en pause, tes notes locales sont intactes. Clone ton dépôt avant de migrer.", { ms: 60000, action: 'Migrer', fn: ghMigrate }); }
+    if (GH.err === 'legacy' && !GH.legacyShown) { GH.legacyShown = true; toast(GH_ERRORS.legacy[1], { ms: 60000, action: 'Migrer', fn: ghMigrate }); }
     if (GH.err === 'massdelete' && !GH.massShown) { GH.massShown = true; toast('Cette synchro supprimerait ' + (e.deleteRemote ? e.deleteRemote + ' notes sur GitHub' : e.deleteLocal + ' notes ici') + '. Ça ressemble à une erreur : rien n\'a été supprimé.', { ms: 60000, action: 'Confirmer', fn: () => { GH.massShown = false; ghSync({ allowMass: true }); } }); }
   }
   GH.busy = false; paintSync();
@@ -1128,7 +1128,7 @@ const GH_ERRORS = {
   repo: ['Dépôt ou accès introuvable', "Vérifie le nom (propriétaire/nom) et que ton jeton couvre ce dépôt."],
   net: ['Hors ligne', "Pas de connexion à GitHub pour le moment. Tes notes sont gardées ici et partiront dès que le réseau revient."],
   conflict: ['Conflit', "Deux appareils écrivaient en même temps. Un nouvel essai part tout seul."],
-  legacy: ['Dépôt à l\'ancien format', "Ton dépôt contient encore l'ancien fichier unique grimoire-notes.json. La synchro est en pause, tes notes locales sont intactes. Clone ton dépôt (sauvegarde), puis migre : l'ancien fichier est conservé dans legacy/."],
+  legacy: ['Dépôt à l\'ancien format', "Ton dépôt GitHub utilise l'ancien format. Migre-le pour reprendre la synchro : l'ancien fichier est gardé dans legacy/. Clone ton dépôt avant, par sécurité."],
   legacymixed: ['Dépôt incohérent', "Le dépôt contient à la fois des notes/ et un grimoire-notes.json en ancien format (une ancienne version de Grimoire a dû y écrire). Rien n'est écrasé : regarde l'historique du dépôt avant de continuer."],
   massdelete: ['Suppression massive bloquée', "Cette synchro supprimerait beaucoup de notes d'un coup : ça ressemble à une erreur (dossier vidé ?). Rien n'a été supprimé. Si c'est voulu, confirme."]
 };

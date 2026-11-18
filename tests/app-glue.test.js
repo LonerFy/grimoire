@@ -8,6 +8,7 @@ const { createFakeGitHub } = require('./helpers/fake-github.js');
 const root = path.join(__dirname, '..', 'src'), app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const glue = app.slice(app.indexOf('const ghState'), app.indexOf('function seedNotes'));
 const fromDocSrc = app.match(/const fromDoc = .*;/)[0];
+const GH_ERRORS = vm.runInNewContext('(' + app.slice(app.indexOf('const GH_ERRORS = ') + 'const GH_ERRORS = '.length, app.indexOf('\n};', app.indexOf('const GH_ERRORS = ')) + 2) + ')');
 
 function device(fake, notes = [], token = 'faux-jeton') {
   const toasts = [], LSdata = {};
@@ -15,7 +16,7 @@ function device(fake, notes = [], token = 'faux-jeton') {
     fetch: fake.fetch, crypto: globalThis.crypto, TextEncoder, TextDecoder, Uint8Array, btoa, atob, Date, JSON, Object, Array, Set, Map, Promise, setTimeout, clearTimeout, Math, console,
     GH: { cfg: { repo: 'o/r' }, token, busy: false, queued: false, err: null, timer: 0, last: 0 },
     S: { backend: { kind: 'github' }, notes: new Map(notes.map(n => [n.id, n])) },
-    dirty: new Set(), saving: new Set(),
+    dirty: new Set(), saving: new Set(), GH_ERRORS,
     LS: { get: k => (k in LSdata ? JSON.parse(LSdata[k]) : null), set: (k, v) => { LSdata[k] = JSON.stringify(v); } },
     newId: (() => { let i = 0; return () => 'cp' + (++i); })(),
     ghOn: () => true, persistVault: { now() {} }, paintSync() {}, afterRemote() {}, ghSchedule() {}, closePops() {},
@@ -40,6 +41,7 @@ test('dépôt à l\'ancien format : pause + invitation à migrer ; l\'action mig
   await a.sync();
   assert.equal(a.GH.err, 'legacy'); assert.equal(Object.keys(fake.files()).filter(p => p.startsWith('notes/')).length, 0);
   const t = a.toasts.find(x => x.action === 'Migrer'); assert.ok(t);
+  assert.equal(t.m, "Ton dépôt GitHub utilise l'ancien format. Migre-le pour reprendre la synchro : l'ancien fichier est gardé dans legacy/. Clone ton dépôt avant, par sécurité.");
   await t.fn(); await new Promise(r => setTimeout(r, 50));
   assert.equal(fake.files()['grimoire-notes.json'], Core.MARKER);
   assert.equal(a.S.notes.size, 2); assert.equal(a.GH.err, null);

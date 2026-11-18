@@ -20,6 +20,11 @@ test('erreur 404 : message demandé', () => {
   assert.equal(GH_ERRORS.repo[0], 'Dépôt ou accès introuvable');
   assert.equal(GH_ERRORS.repo[1], 'Vérifie le nom (propriétaire/nom) et que ton jeton couvre ce dépôt.');
 });
+test('ancien format : message « Migrer » simplifié, identique dans la bulle', () => {
+  assert.equal(GH_ERRORS.legacy[1], "Ton dépôt GitHub utilise l'ancien format. Migre-le pour reprendre la synchro : l'ancien fichier est gardé dans legacy/. Clone ton dépôt avant, par sécurité.");
+  assert.ok(!/un seul fichier|grimoire-notes\.json/.test(GH_ERRORS.legacy[1]));
+  assert.ok(!app.includes('est encore à l\'ancien format (un seul fichier)'));
+});
 test('chaque code d\'erreur produit par l\'appli a un message', () => {
   for (const k of ['auth', 'repo', 'net', 'conflict', 'legacy', 'legacymixed', 'massdelete']) {
     assert.ok(Array.isArray(GH_ERRORS[k]) && GH_ERRORS[k][0] && GH_ERRORS[k][1], k);
