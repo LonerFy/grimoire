@@ -1122,6 +1122,16 @@ const SYNC = {
   synced: ['Synchronisé', 'Tout est synchronisé', "Tes notes sont dans ton compte Claude, dans un carnet que toi seul peux lire. Ouvre cette même page sur ton téléphone ou ton PC, connecté au même compte : elles y sont, et chaque modification arrive en direct."],
   error: ['Synchro en pause', 'Synchronisation interrompue', "Les dernières modifications ne sont pas encore parvenues au serveur. Garde la page ouverte : un nouvel essai part tout seul. Par sécurité, exporte tes notes depuis le menu en bas de l'index."]
 };
+/* Messages d'erreur de la synchro GitHub : [titre, texte]. Clé = code de ghErrCode(). */
+const GH_ERRORS = {
+  auth: ['Jeton refusé', "GitHub refuse le jeton. Vérifie qu'il n'a pas expiré et qu'il a le droit Contents en lecture et écriture sur ce dépôt."],
+  repo: ['Dépôt ou accès introuvable', "Vérifie le nom (propriétaire/nom) et que ton jeton couvre ce dépôt."],
+  net: ['Hors ligne', "Pas de connexion à GitHub pour le moment. Tes notes sont gardées ici et partiront dès que le réseau revient."],
+  conflict: ['Conflit', "Deux appareils écrivaient en même temps. Un nouvel essai part tout seul."],
+  legacy: ['Dépôt à l\'ancien format', "Ton dépôt contient encore l'ancien fichier unique grimoire-notes.json. La synchro est en pause, tes notes locales sont intactes. Clone ton dépôt (sauvegarde), puis migre : l'ancien fichier est conservé dans legacy/."],
+  legacymixed: ['Dépôt incohérent', "Le dépôt contient à la fois des notes/ et un grimoire-notes.json en ancien format (une ancienne version de Grimoire a dû y écrire). Rien n'est écrasé : regarde l'historique du dépôt avant de continuer."],
+  massdelete: ['Suppression massive bloquée', "Cette synchro supprimerait beaucoup de notes d'un coup : ça ressemble à une erreur (dossier vidé ?). Rien n'a été supprimé. Si c'est voulu, confirme."]
+};
 function paintSync() {
   const st = syncState();
   $('#sync').dataset.state = st; $('#syncDot').dataset.state = st;
@@ -1131,9 +1141,8 @@ function paintSync() {
 function fillSyncPop() {
   const st = syncState(); let extra = '';
   if (S.backend && S.backend.kind === 'github') {
-    const E = { auth: ['Jeton refusé', "GitHub refuse le jeton. Vérifie qu'il n'a pas expiré et qu'il a le droit Contents en lecture et écriture sur ce dépôt."], repo: ['Dépôt introuvable', "GitHub ne trouve pas ce dépôt avec ce jeton. Vérifie l'orthographe (propriétaire/nom) et que le jeton couvre ce dépôt."], net: ['Hors ligne', "Pas de connexion à GitHub pour le moment. Tes notes sont gardées ici et partiront dès que le réseau revient."], conflict: ['Conflit', "Deux appareils écrivaient en même temps. Un nouvel essai part tout seul."], legacy: ['Dépôt à l\'ancien format', "Ton dépôt contient encore l'ancien fichier unique grimoire-notes.json. La synchro est en pause, tes notes locales sont intactes. Clone ton dépôt (sauvegarde), puis migre : l'ancien fichier est conservé dans legacy/."], legacymixed: ['Dépôt incohérent', "Le dépôt contient à la fois des notes/ et un grimoire-notes.json en ancien format (une ancienne version de Grimoire a dû y écrire). Rien n'est écrasé : regarde l'historique du dépôt avant de continuer."], massdelete: ['Suppression massive bloquée', "Cette synchro supprimerait beaucoup de notes d'un coup : ça ressemble à une erreur (dossier vidé ?). Rien n'a été supprimé. Si c'est voulu, confirme."] };
     if (GH.err) {
-      const m = E[GH.err] || E.net, act = GH.err === 'legacy' ? 'Migrer maintenant' : GH.err === 'massdelete' ? 'Confirmer la suppression' : '';
+      const m = GH_ERRORS[GH.err] || GH_ERRORS.net, act = GH.err === 'legacy' ? 'Migrer maintenant' : GH.err === 'massdelete' ? 'Confirmer la suppression' : '';
       $('#syncPop').innerHTML = '<h3>' + m[0] + '</h3><p>' + m[1] + '</p>' + (act ? '<p><button type="button" id="ghAct" class="btn">' + act + '</button></p>' : '');
       const b = $('#ghAct'); if (b) b.onclick = () => { closePops(); if (GH.err === 'legacy') ghMigrate(); else { GH.massShown = false; ghSync({ allowMass: true }); } };
       return;
